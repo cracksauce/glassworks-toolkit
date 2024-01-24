@@ -15,36 +15,54 @@
 import streamlit as st
 from streamlit.logger import get_logger
 
+
 LOGGER = get_logger(__name__)
 
 
 def run():
     st.set_page_config(
-        page_title="Hello",
-        page_icon="👋",
+        page_title="Prompt Optimization",
+        page_icon="🔬",
     )
-
-    st.write("# Welcome to Streamlit! 👋")
-
-    st.sidebar.success("Select a demo above.")
+    st.title("Glass Health - Consult Prompt Optimization")
 
     st.markdown(
-        """
-        Streamlit is an open-source app framework built specifically for
-        Machine Learning and Data Science projects.
-        **👈 Select a demo from the sidebar** to see some examples
-        of what Streamlit can do!
-        ### Want to learn more?
-        - Check out [streamlit.io](https://streamlit.io)
-        - Jump into our [documentation](https://docs.streamlit.io)
-        - Ask a question in our [community
-          forums](https://discuss.streamlit.io)
-        ### See more complex demos
-        - Use a neural net to [analyze the Udacity Self-driving Car Image
-          Dataset](https://github.com/streamlit/demo-self-driving)
-        - Explore a [New York City rideshare dataset](https://github.com/streamlit/demo-uber-nyc-pickups)
-    """
+        """### Project Overview
+
+The Streamlit app serves as a platform for:
+
+- Batch running Consult prompts to GPT-4 Turbo to assess performance on Clinical Knowledge Multiple Choice Questions (MCQs) from MedQA and NBME self-assessments and practice shelf exams.
+- Dynamic input handling for customizable inputs and prompts.
+- Option to download Outputs and analyze on the shared Google Sheet.
+### Project Roadmap
+
+- [ ]  Expand datasets for DDx, A&P, and clinical reference question testing
+- [ ]  Implement automated evaluation tools for metrics
+- [ ]  Develop real-time visualization of evaluation processes.
+- [ ]  Automate result exporting to separately hosted database for easy process logging."""
     )
+    # File uploader for the input data (MCQ datasets)
+    uploaded_file = st.file_uploader("Upload your MCQ dataset", type=["csv"])
+    if uploaded_file is not None:
+        # Process the file here
+        # ...
+
+        # Set up the parallel processing environment
+        setup_parallel_processing()
+
+        # Placeholder for real-time updates
+        progress_placeholder = st.empty()
+        progress_bar = st.progress(0)
+
+        # Call the parallel processing function
+        results = run_parallel_processing(data, params)
+
+        # Update progress bar and placeholder with status
+        # ...
+
+        # Once complete, display results and provide download link
+        st.write(results)
+        st.download_button("Download Results", results)
 
 
 if __name__ == "__main__":
