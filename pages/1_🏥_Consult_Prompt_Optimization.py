@@ -43,9 +43,16 @@ if 'progress_bar' not in st.session_state:
     st.session_state['progress_bar'] = None
 if 'log_messages' not in st.session_state:
     st.session_state['log_messages'] = []
-    
+if 'selected_mcqs_list' not in st.session_state:
+    st.session_state['selected_mcqs_list'] = []
+if 'batch_run_is_complete' not in st.session_state:
+    st.session_state['batch_run_is_complete'] = False
+if 'formatted_system_message' not in st.session_state:
+    st.session_state['formatted_system_message'] = ""
+if 'formatted_prompt' not in st.session_state:
+    st.session_state['formatted_prompt'] = ""
+     
 # Other random initializations
-batch_run_is_complete = False
 data_file_path = ""
 requests_file_path = ""
 results_file_path = ""
@@ -54,6 +61,13 @@ output_file_path = ""
 # Function to update the session state with selected rows
 def update_selected_rows(selected_rows_data):
     st.session_state.selected_rows = selected_rows_data
+
+def run_in_thread(fn, *args, **kwargs):
+    """Run a function in a separate thread while maintaining Streamlit context."""
+    def wrapped_fn():
+        with st.script_run_ctx():
+            fn(*args, **kwargs)
+    threading.Thread(target=wrapped_fn).start()
 
 # Function to normalize the dataframe structure
 def normalize_df(df):
@@ -67,7 +81,7 @@ def normalize_df(df):
         logging.error(f"Error in normalizing DataFrame: {e}")
         st.error(f"An error occurred: {e}")
         
-def process_batch_runs():
+def process_batch_runs(batch_run_data):
     # Define the file paths within the function scope
     data_file_path = None
     requests_file_path = None
@@ -77,7 +91,7 @@ def process_batch_runs():
         batch_run = batch_run_queue.get()
         if batch_run is None:
             # Signal the end of the queue and break the loop
-            batch_run_is_complete = True
+            st.session_state['batch_run_is_complete'] = True  # Update the state here
             break
         
         try:
@@ -120,7 +134,7 @@ def process_batch_runs():
             batch_run_queue.task_done()
 
     # Indicate the batch run is complete
-    if batch_run_is_complete:
+    if st.session_state['batch_run_is_complete']:
         st.session_state['batch_status'] = 'Completed'
         selected_mcqs_list, formatted_system_message, formatted_prompt = batch_run
 
@@ -228,7 +242,7 @@ def main():
             st.write("**😎 Your manual selection has been processed**")
             # Populate the selected_mcqs_list here after manual selection is processed
             normalized_df = normalize_df(st.session_state['selected_data'])
-            selected_mcqs_list = normalized_df['full_qa_with_qid'].tolist()
+            st.session_state['selected_mcqs_list'] = normalized_df['full_qa_with_qid'].tolist()
 
 
     # Auto Selection of MCQs
@@ -250,7 +264,7 @@ def main():
             st.write("**😎 Your auto selection has been processed**")
             # Populate the selected_mcqs_list here after auto selection is processed
             normalized_df = normalize_df(st.session_state['selected_data'])
-            selected_mcqs_list = normalized_df['full_qa_with_qid'].tolist()
+            st.session_state['selected_mcqs_list'] = normalized_df['full_qa_with_qid'].tolist()
 
     # Conditional UI elements that should only appear after loading questions
     if st.session_state.get('manual_load_clicked') or st.session_state.get('auto_load_clicked'):
@@ -265,43 +279,61 @@ def main():
         system_message = st.text_area("Your system message:")
         prompt_message = st.text_area("Your prompt:")
 
-        # Formatting system message and prompt
-        formatted_system_message = placeholder_system_message.format(user_system_message=system_message)
-        formatted_prompt = placeholder_prompt.format(user_prompt=prompt_message)
+        # Update session state with the formatted messages
+        st.session_state['formatted_system_message'] = placeholder_system_message.format(user_system_message=system_message)
+        st.session_state['formatted_prompt'] = placeholder_prompt.format(user_prompt=prompt_message)
+
+        if 'batch_initiated' not in st.session_state:
+            st.session_state['batch_initiated'] = False
+
+        if 'batch_status' not in st.session_state:
+            st.session_state['batch_status'] = 'Not started'
+
+        if 'log_messages' not in st.session_state:
+            st.session_state['log_messages'] = []
             
-        if st.button('Initiate batch run') and selected_mcqs_list:
+        # Check if 'Initiate batch run' button was pressed and if 'selected_mcqs_list' is not empty
+        if st.button('Initiate batch run'):
             st.session_state['batch_initiated'] = True
             st.session_state['progress'] = 0
 
-            # Add the batch run data to the queue
-            batch_run_data = (selected_mcqs_list, formatted_system_message, formatted_prompt)
-            batch_run_queue.put(batch_run_data)
+        # Check if 'selected_mcqs_list' is defined and not empty
+            if 'selected_mcqs_list' in st.session_state and st.session_state['selected_mcqs_list']:
+                # Add the batch run data to the queue
+                batch_run_data = (
+                    st.session_state['selected_mcqs_list'], 
+                    st.session_state['formatted_system_message'], 
+                    st.session_state['formatted_prompt']
+                )                    
+                batch_run_queue.put(batch_run_data)
 
-            # Start threads to process batch runs and update the UI
-            run_in_thread(process_batch_runs, batch_run_data)
+                # Start threads to process batch runs and update the UI
+                run_in_thread(process_batch_runs, batch_run_data)
 
-            st.write("**🤓 Batch run initiated!**")
+                st.write("**🤓 Batch run initiated!**")
+            else:
+                st.error("No MCQs selected. Please select MCQs before initiating the batch run.")
 
-        if st.session_state['batch_initiated']:
-            # Display progress and logs
-            col1, col2 = st.columns(2)
+    if st.session_state['batch_initiated']:
+        # Display progress and logs
+        col1, col2 = st.columns(2)
 
-            with col1:
-                st.write("**📊 Batch Progress:**")
-                progress_bar = st.progress(st.session_state['progress'])
+        with col1:
+            st.write("**📊 Batch Progress:**")
+            st.session_state['progress_bar'] = st.progress(st.session_state['progress'])
 
-            with col2:
-                st.write("**📜 Log Output:**")
-                log_output = st.empty()
-                log_output.text('\n'.join(st.session_state['log_messages']))
+        with col2:
+            st.write("**📜 Log Output:**")
+            st.session_state['log_output'] = st.empty()
+            st.session_state['log_output'].text('\n'.join(st.session_state['log_messages']))
 
-            if st.session_state['batch_status'] == 'Completed':
-                with open(output_file_path, "rb") as file:
-                    st.download_button(
-                        label="💻 Download Results as CSV",
-                        data=file,
-                        file_name="batch_results.csv",
-                        mime="text/csv",
-                    )
+        if st.session_state['batch_status'] == 'Completed':
+            with open(output_file_path, "rb") as file:
+                st.download_button(
+                    label="💻 Download Results as CSV",
+                    data=file,
+                    file_name="batch_results.csv",
+                    mime="text/csv",
+                )
 if __name__ == "__main__":
     main()
