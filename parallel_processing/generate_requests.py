@@ -18,7 +18,7 @@ def generate_chat_completion_requests(requests_file_path, data, system_message, 
     with open(requests_file_path, "w") as f:
         for item in data:
             # Concatenate the system message and user prompt with the item data
-            user_message = f"{user_prompt}\n\nConsult Question:\n'{item}'"
+            user_message = f"{user_prompt}\n'{item}'"
 
             # Construct the request body with additional parameters from .env
             request_body = {
