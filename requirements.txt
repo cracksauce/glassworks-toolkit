@@ -51,3 +51,4 @@ black
 isort
 autoflake
 ruff
+streamlit-aggrid
