@@ -39,8 +39,8 @@ if 'selected_rows' not in st.session_state:
     st.session_state.selected_rows = []
 if 'batch_status' not in st.session_state:
     st.session_state['batch_status'] = 'Not started'
-if 'progress' not in st.session_state:
-    st.session_state['progress'] = 0
+if 'progress_bar' not in st.session_state:
+    st.session_state['progress_bar'] = None
 if 'log_messages' not in st.session_state:
     st.session_state['log_messages'] = []
     
@@ -184,6 +184,9 @@ def main():
 
     # Load the data
     df = load_data(csv_file_path)
+    
+    # Initialize the variable at the start of your main function
+    selected_mcqs_list = []
 
     # Manual Selection of MCQs
     st.subheader("Manual Select MCQs")
@@ -223,6 +226,10 @@ def main():
         if st.session_state['manual_selection']:
             st.session_state['manual_load_clicked'] = True  # Ensure this is set here
             st.write("**😎 Your manual selection has been processed**")
+            # Populate the selected_mcqs_list here after manual selection is processed
+            normalized_df = normalize_df(st.session_state['selected_data'])
+            selected_mcqs_list = normalized_df['full_qa_with_qid'].tolist()
+
 
     # Auto Selection of MCQs
     st.subheader("Auto Select MCQs")
@@ -241,9 +248,9 @@ def main():
             st.session_state['auto_load_clicked'] = True  # Ensure this is set here
             st.session_state['selected_data'] = df.iloc[start_index:end_index]
             st.write("**😎 Your auto selection has been processed**")
-        else:
-            st.session_state['auto_selection'] = False  # Reset state if range is not valid
-            st.session_state['auto_load_clicked'] = False
+            # Populate the selected_mcqs_list here after auto selection is processed
+            normalized_df = normalize_df(st.session_state['selected_data'])
+            selected_mcqs_list = normalized_df['full_qa_with_qid'].tolist()
 
     # Conditional UI elements that should only appear after loading questions
     if st.session_state.get('manual_load_clicked') or st.session_state.get('auto_load_clicked'):
@@ -258,55 +265,43 @@ def main():
         system_message = st.text_area("Your system message:")
         prompt_message = st.text_area("Your prompt:")
 
-            # Formatting system message and prompt
+        # Formatting system message and prompt
         formatted_system_message = placeholder_system_message.format(user_system_message=system_message)
         formatted_prompt = placeholder_prompt.format(user_prompt=prompt_message)
             
-        if st.button('Initiate batch run'):
+        if st.button('Initiate batch run') and selected_mcqs_list:
             st.session_state['batch_initiated'] = True
-            normalized_df = normalize_df(st.session_state['selected_data'])
-            selected_mcqs_list = normalized_df['full_qa_with_qid'].tolist()
-            
-            # UI for progress and logs
-            col1, col2 = st.columns(2)
-                
-            with col1:
-                st.write("**📊 Batch Progress:**")
-                progress_bar = st.progress(st.session_state['progress'])
-                
-            with col2:
-                st.write("**📜 Log Output:**")
-                log_output = st.empty()            
-            
-            # Save references to progress bar and log output in session state
-            st.session_state['progress_bar'] = progress_bar
-            st.session_state['log_output'] = log_output
+            st.session_state['progress'] = 0
 
             # Add the batch run data to the queue
             batch_run_data = (selected_mcqs_list, formatted_system_message, formatted_prompt)
             batch_run_queue.put(batch_run_data)
 
-            # Start a new thread to process batch runs
-            threading.Thread(target=process_batch_runs, daemon=True).start()
+            # Start threads to process batch runs and update the UI
+            run_in_thread(process_batch_runs, batch_run_data)
 
-            # Start another thread to update the UI
-            threading.Thread(target=update_ui, daemon=True).start()
-
-            # Initiate batch processing using the imported function
-            threading.Thread(
-                target=process_data,
-                args=(requests_file_path, results_file_path, output_file_path, selected_mcqs_list, os.getenv('MODEL_NAME'), os.getenv('OPENAI_API_KEY')),
-                daemon=True
-            ).start()
             st.write("**🤓 Batch run initiated!**")
 
-    if st.session_state['batch_status'] == 'Completed':
-        with open(output_file_path, "rb") as file:
-            st.download_button(
-                label="💻 Download Results as CSV",
-                data=file,
-                file_name="batch_results.csv",
-                mime="text/csv",
-            ) 
+        if st.session_state['batch_initiated']:
+            # Display progress and logs
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.write("**📊 Batch Progress:**")
+                progress_bar = st.progress(st.session_state['progress'])
+
+            with col2:
+                st.write("**📜 Log Output:**")
+                log_output = st.empty()
+                log_output.text('\n'.join(st.session_state['log_messages']))
+
+            if st.session_state['batch_status'] == 'Completed':
+                with open(output_file_path, "rb") as file:
+                    st.download_button(
+                        label="💻 Download Results as CSV",
+                        data=file,
+                        file_name="batch_results.csv",
+                        mime="text/csv",
+                    )
 if __name__ == "__main__":
     main()
