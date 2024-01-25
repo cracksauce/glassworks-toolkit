@@ -13,19 +13,18 @@
 # limitations under the License.
 
 import streamlit as st
-from streamlit.logger import get_logger
 
+# Define main app logic
+def main():
+    st.set_page_config(page_title="Prompt Optimization", page_icon="🔬")
 
-LOGGER = get_logger(__name__)
-
+    # Sidebar navigation
+with st.sidebar:
+    st.sidebar.success("Select an application above.")
 
 def run():
-    st.set_page_config(
-        page_title="Prompt Optimization",
-        page_icon="🔬",
-    )
-    st.title("Glass Health - Consult Prompt Optimization")
-
+    st.title("Glass Health Prompt Optimization")
+    
     st.markdown(
         """### Project Overview
 
@@ -41,29 +40,6 @@ The Streamlit app serves as a platform for:
 - [ ]  Develop real-time visualization of evaluation processes.
 - [ ]  Automate result exporting to separately hosted database for easy process logging."""
     )
-    # File uploader for the input data (MCQ datasets)
-    uploaded_file = st.file_uploader("Upload your MCQ dataset", type=["csv"])
-    if uploaded_file is not None:
-        # Process the file here
-        # ...
-
-        # Set up the parallel processing environment
-        setup_parallel_processing()
-
-        # Placeholder for real-time updates
-        progress_placeholder = st.empty()
-        progress_bar = st.progress(0)
-
-        # Call the parallel processing function
-        results = run_parallel_processing(data, params)
-
-        # Update progress bar and placeholder with status
-        # ...
-
-        # Once complete, display results and provide download link
-        st.write(results)
-        st.download_button("Download Results", results)
-
 
 if __name__ == "__main__":
     run()
