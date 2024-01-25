@@ -1,8 +1,8 @@
 import json
 import os
-from parallel_processing.prompts import placeholder_prompt, placeholder_system_message
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 # Load additional configuration from environment variables
@@ -13,19 +13,14 @@ temperature = float(os.getenv("TEMPERATURE", "0"))
 top_p = float(os.getenv("TOP_P", "0"))
 n = int(os.getenv("N", "1"))
 
-def generate_chat_completion_requests(
-    filename,
-    data,
-    system_message,
-    user_prompt,
-    model_name=os.getenv("MODEL_NAME", "gpt-3.5-turbo"),
-):
-    with open(filename, "w") as f:
-        for x in data:
-            # Concatenate metaprompt and mcq data for each request
-            user_message = f"{user_prompt}\n'{x}'"
+def generate_chat_completion_requests(requests_file_path, data, system_message, user_prompt, model_name):
+    # Ensure the 'requests_file_path' is the temporary file path passed from the Streamlit app
+    with open(requests_file_path, "w") as f:
+        for item in data:
+            # Concatenate the system message and user prompt with the item data
+            user_message = f"{user_prompt}\n\nConsult Question:\n'{item}'"
 
-            # Construct the request body with additional parameters
+            # Construct the request body with additional parameters from .env
             request_body = {
                 "model": model_name,
                 "messages": [
@@ -37,10 +32,10 @@ def generate_chat_completion_requests(
                 "presence_penalty": presence_penalty,
                 "temperature": temperature,
                 "top_p": top_p,
-                "n": n
-                # Add other parameters as needed
+                "n": n,
+                # Additional parameters can be included here if needed
             }
 
-            # Write the request body to the JSONL file
+            # Write the request body to the temporary .jsonl file
             json_string = json.dumps(request_body)
             f.write(json_string + "\n")

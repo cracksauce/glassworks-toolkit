@@ -1,4 +1,3 @@
-# api_request_parallel_processor.py
 import aiohttp  # for making API calls concurrently
 import asyncio  # for running API calls concurrently
 import json  # for saving results to a jsonl file
@@ -12,6 +11,7 @@ from dataclasses import (
     field,
 )  # for storing API inputs, outputs, and metadata
 from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv()
 
@@ -23,42 +23,67 @@ max_tokens_per_minute = float(os.getenv("MAX_TOKENS_PER_MINUTE", "60000"))
 token_encoding_name = os.getenv("TOKEN_ENCODING_NAME", "cl100k_base")
 max_attempts = int(os.getenv("MAX_ATTEMPTS", "5"))
 logging_level = int(os.getenv("LOGGING_LEVEL", "20"))
-requests_filepath = os.getenv("REQUESTS_FILE_PATH", "requests_to_chat_completion.jsonl")
-save_filepath = os.getenv("RESULTS_FILE_PATH", "results_of_chat_completion.jsonl")
 
 # Constants
 seconds_to_pause_after_rate_limit_error = 15
 seconds_to_sleep_each_loop = (
     0.001  # 1 ms limits max throughput to 1,000 requests per second
 )
+# Configure logging
+logging.basicConfig(filename='parallel_processing.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Initialize logging
-logging.basicConfig(level=logging_level)
-logging.debug(f"Logging initialized at level {logging_level}")
-
-
+# Define async function to process requests
 async def process_api_requests_from_file(
-    requests_filepath: str,
-    save_filepath: str,
-    request_url: str,
-    api_key: str,
-    max_requests_per_minute: float,
-    max_tokens_per_minute: float,
-    token_encoding_name: str,
-    max_attempts: int,
-    logging_level: int,
+    requests_filepath,  # Passed as a parameter
+    save_filepath,      # Passed as a parameter
+    request_url,
+    api_key,
+    max_requests_per_minute,
+    max_tokens_per_minute,
+    token_encoding_name,
+    max_attempts,
+    logging_level,
 ):
+    # Set up an HTTP session
+    async with aiohttp.ClientSession() as session:
+        # Open the file with the requests
+        with open(requests_filepath, 'r') as file:
+            # Read each line (each request) from the file
+            for line in file:
+                request_data = json.loads(line)
+                
+                # Construct the headers for the request
+                headers = {
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Bearer {api_key}'
+                }
+                
+                # Make the API request and get the response
+                async with session.post(request_url, headers=headers, json=request_data) as response:
+                    if response.status == 200:
+                        # If the request was successful, parse the response and save it
+                        response_data = await response.json()
+                        with open(save_filepath, 'a') as output_file:
+                            json.dump(response_data, output_file)
+                            output_file.write('\n')
+                    else:
+                        # If the request was not successful, log detailed error information
+                        try:
+                            error_response_data = await response.json()  # Attempt to parse the error response
+                            error_message = error_response_data.get('error', {}).get('message', 'No error message provided')
+                            logging.error(f"Failed request with status code: {response.status}. Error message: {error_message}")
+                        except json.JSONDecodeError:
+                            # If parsing the error response fails, log the status code and mention that the error response was not JSON
+                            logging.error(f"Failed request with status code: {response.status}. The error response was not in JSON format.")
+
+
     """Processes API requests in parallel, throttling to stay under rate limits."""
     # constants
     seconds_to_pause_after_rate_limit_error = 15
     seconds_to_sleep_each_loop = (
         0.001  # 1 ms limits max throughput to 1,000 requests per second
     )
-
-    # initialize logging
-    logging.basicConfig(level=logging_level)
-    logging.debug(f"Logging initialized at level {logging_level}")
-
     # infer API endpoint and construct request header
     api_endpoint = api_endpoint_from_url(request_url)
     request_header = {"Authorization": f"Bearer {api_key}"}
@@ -86,7 +111,9 @@ async def process_api_requests_from_file(
     logging.debug(f"Initialization complete.")
 
     # initialize file reading
-    with open(requests_filepath) as file:
+    with open(requests_filepath, 'r') as file:
+        for line in file:
+            request_data = json.loads(line)
         # `requests` will provide requests one at a time
         requests = file.__iter__()
         logging.debug(f"File opened. Entering main loop")
@@ -200,10 +227,6 @@ async def process_api_requests_from_file(
                 f"{status_tracker.num_rate_limit_errors} rate limit errors received. Consider running at a lower rate."
             )
 
-
-# dataclasses
-
-
 @dataclass
 class StatusTracker:
     """Stores metadata about the script's progress. Only one instance is created."""
@@ -229,42 +252,30 @@ class APIRequest:
     metadata: dict
     result: list = field(default_factory=list)
 
-    async def call_api(
-        self,
-        session: aiohttp.ClientSession,
-        request_url: str,
-        request_header: dict,
-        retry_queue: asyncio.Queue,
-        save_filepath: str,
-        status_tracker: StatusTracker,
-    ):
-        """Calls the OpenAI API and saves results."""
+    async def call_api(self, session: aiohttp.ClientSession, request_url: str, request_header: dict, retry_queue: asyncio.Queue, save_filepath: str, status_tracker: StatusTracker):
         logging.info(f"Starting request #{self.task_id}")
         error = None
         try:
-            async with session.post(
-                url=request_url, headers=request_header, json=self.request_json
-            ) as response:
-                response = await response.json()
-            if "error" in response:
-                logging.warning(
-                    f"Request {self.task_id} failed with error {response['error']}"
-                )
-                status_tracker.num_api_errors += 1
-                error = response
-                if "Rate limit" in response["error"].get("message", ""):
-                    status_tracker.time_of_last_rate_limit_error = time.time()
-                    status_tracker.num_rate_limit_errors += 1
-                    status_tracker.num_api_errors -= (
-                        1  # rate limit errors are counted separately
-                    )
-
-        except (
-            Exception
-        ) as e:  # catching naked exceptions is bad practice, but in this case we'll log & save them
+            async with session.post(url=request_url, headers=request_header, json=self.request_json) as response:
+                if response.status != 200:
+                    # Log detailed error message for non-200 responses
+                    error_detail = await response.text()
+                    logging.error(f"Request {self.task_id} failed with status {response.status}: {error_detail}")
+                    error = f"HTTP {response.status}: {error_detail}"
+                else:
+                    response_data = await response.json()
+                    if "error" in response_data:
+                        logging.warning(f"Request {self.task_id} failed with error {response_data['error']}")
+                        status_tracker.num_api_errors += 1
+                        error = response_data['error']
+                        if "Rate limit" in response_data["error"].get("message", ""):
+                            status_tracker.time_of_last_rate_limit_error = time.time()
+                            status_tracker.num_rate_limit_errors += 1
+                            status_tracker.num_api_errors -= 1  # rate limit errors are counted separately
+        except Exception as e:
             logging.warning(f"Request {self.task_id} failed with Exception {e}")
             status_tracker.num_other_errors += 1
-            error = e
+            error = str(e)
         if error:
             self.result.append(error)
             if self.attempts_left:

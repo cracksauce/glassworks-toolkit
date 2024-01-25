@@ -71,7 +71,7 @@ def save_generated_data_to_csv(input_filename, output_filename):
 
 if __name__ == "__main__":
     input_filename = os.getenv(
-        "REQUESTS_FILE_PATH", "requests_to_chat_completion.jsonl"
+        "REQUESTS_FILE_PATH", "requests_to_chat_completion.jsonl" # need to fix this and use temp
     )
-    output_filename = os.getenv("OUTPUT_FILE_PATH", "output.csv")
+    output_filename = os.getenv("OUTPUT_FILE_PATH", "output.csv") #need to fix this and use temp csv that user can download
     save_generated_data_to_csv(input_filename, output_filename)

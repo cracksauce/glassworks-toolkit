@@ -1,0 +1,7 @@
+.env
+parallel_processing.log
+__init__.py
+parallel_processing/__init__.py
+parallel_processing/input.csv
+parallel_processing/prompts.py
+parallel_processing/csv_to_array.py

@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import json
 import tempfile
 import os
 import queue
@@ -7,8 +8,13 @@ import threading
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
 from parallel_processing.prompts import placeholder_system_message, placeholder_prompt
 from parallel_processing.generate_requests import generate_chat_completion_requests
+from parallel_processing.main import main as parallel_processing_main
+from parallel_processing.main import process_data
 import logging
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Initialize logger for error tracking
 logging.basicConfig(filename='app_errors.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -29,6 +35,12 @@ if 'auto_selection' not in st.session_state:
     st.session_state['auto_selection'] = False
 if 'selected_rows' not in st.session_state:
     st.session_state.selected_rows = []
+if 'batch_status' not in st.session_state:
+    st.session_state['batch_status'] = 'Not started'
+if 'progress' not in st.session_state:
+    st.session_state['progress'] = 0
+if 'log_messages' not in st.session_state:
+    st.session_state['log_messages'] = []
 
 # Function to update the session state with selected rows
 def update_selected_rows(selected_rows_data):
@@ -46,30 +58,84 @@ def normalize_df(df):
         logging.error(f"Error in normalizing DataFrame: {e}")
         st.error(f"An error occurred: {e}")
         
-# Function to process batch runs sequentially
 def process_batch_runs():
     while True:
         batch_run = batch_run_queue.get()
         if batch_run is None:
+            # If we get None, it means we are signaling the end of the queue
             break
-
-        selected_mcqs_list, formatted_system_message, formatted_prompt = batch_run
         
-        # Using tempfile to manage temporary storage of data, requests, and results
-        with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.py') as data_file, \
-             tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.jsonl') as request_file, \
-             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.jsonl') as result_file, \
-             tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.csv') as output_file:
+        try:
+            # Now we're sure batch_run is not None, we can unpack it
+            selected_mcqs_list, formatted_system_message, formatted_prompt = batch_run
+            
+            # Using tempfile to manage temporary storage of data, requests, and results
+            with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.py') as data_file, \
+                tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.jsonl') as request_file, \
+                tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.jsonl') as result_file, \
+                tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.csv') as output_file:
 
-            data_file.write(f"data = {selected_mcqs_list}")
-            data_file_path = data_file.name
-            requests_file_path = request_file.name
-            results_file_path = result_file.name
-            output_file_path = output_file.name
+                data_file.write(f"data = {selected_mcqs_list}")
+                data_file_path = data_file.name
+                requests_file_path = request_file.name
+                results_file_path = result_file.name
+                output_file_path = output_file.name
+            
+            # Initialize progress
+            total_tasks = len(selected_mcqs_list)
+            completed_tasks = 0
+                
+            for task in selected_mcqs_list:
+                # Simulate task processing (e.g., calling an API, processing data)
+                # ...
+                # Update task progress
+                completed_tasks += 1
+                progress = int((completed_tasks / total_tasks) * 100)
+                st.session_state['progress'] = progress
+                st.session_state['progress_bar'].progress(progress)
+                
+                # Here, call the main processing function for each selected MCQ batch
+                parallel_processing_main.main(
+                    data=task,
+                    prompt=formatted_system_message + formatted_prompt,
+                    model_name=os.getenv('MODEL_NAME'),
+                    data_file_path=data_file_path,
+                    requests_file_path=requests_file_path,
+                    results_file_path=results_file_path,
+                    output_file_path=output_file_path
+                )
+                
+                # Update log messages periodically or upon certain events
+                log_message = f"Completed task {completed_tasks} of {total_tasks}"
+                st.session_state['log_messages'].append(log_message)
+                st.session_state['log_output'].text('\n'.join(st.session_state['log_messages']))
+            
+                # Update completion message and status
+                completion_message = f"Batch run completed. Results saved."
+                st.session_state['log_messages'].append(completion_message)
+                st.session_state['log_output'].text('\n'.join(st.session_state['log_messages']))
+                st.session_state['batch_status'] = 'Completed'
+                        
+        except Exception as e:
+            error_message = f"Error occurred: {e}"
+            st.session_state['log_messages'].append(error_message)
+            st.session_state['log_output'].text('\n'.join(st.session_state['log_messages']))
+            logging.error(error_message)
+            st.session_state['batch_status'] = 'Failed'
 
-            generate_chat_completion_requests(requests_file_path, selected_mcqs_list, formatted_system_message, formatted_prompt)
+        finally:
             batch_run_queue.task_done()
 
+    # Indicate the batch run is complete
+    if batch_run_is_complete:
+        selected_mcqs_list, formatted_system_message, formatted_prompt = batch_run
+        
+        # Convert .jsonl results to DataFrame and save as .csv
+        results_df = jsonl_to_dataframe(results_file_path)
+        results_df.to_csv(output_file_path, index=False)
+        st.session_state['batch_status'] = '🥳 Batch run completed! Saving results...'
+        st.success('Batch run completed and results are saved!')
+            
 # Define button functionality to update session state
 def manual_load():
     st.session_state['manual_load_clicked'] = True
@@ -199,20 +265,47 @@ def main():
                 if st.button('Initiate batch run'):
                     normalized_df = normalize_df(st.session_state['selected_data'])
                     selected_mcqs_list = normalized_df['full_qa_with_qid'].tolist()
-                 # Function to initiate and manage batch runs
-                    def initiate_and_manage_batch_runs(selected_mcqs_list, formatted_system_message, formatted_prompt):
-                        try:
-                            # Place the batch run details into the queue
-                            batch_run_queue.put((selected_mcqs_list, formatted_system_message, formatted_prompt))
-                            
-                            # Start a thread to process batch runs if not already started
-                            if 'batch_thread_started' not in st.session_state or not st.session_state.batch_thread_started:
-                                threading.Thread(target=process_batch_runs, daemon=True).start()
-                                st.session_state.batch_thread_started = True
-                            st.write("Batch run initiated!")
-                        except Exception as e:
-                            logging.error(f"Error initiating batch run: {e}")
-                            st.error(f"An error occurred while initiating batch run: {e}")
+                        # UI for progress and logs
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**📊 Batch Progress:**")
+                        progress_bar = st.progress(st.session_state['progress'])
+                        
+                    with col2:
+                        st.write("**📜 Log Output:**")
+                        log_output = st.empty()
+                        
+                    # Save references to progress bar and log output in session state
+                    st.session_state['progress_bar'] = progress_bar
+                    st.session_state['log_output'] = log_output
+
+                    # Add the batch run data to the queue
+                    batch_run_data = (selected_mcqs_list, formatted_system_message, formatted_prompt)
+                    batch_run_queue.put(batch_run_data)
+
+                    # Start a new thread to process batch runs
+                    threading.Thread(target=process_batch_runs, daemon=True).start()
+
+                    # Start another thread to update the UI
+                    threading.Thread(target=update_ui, daemon=True).start()
+
+                    # Initiate batch processing using the imported function
+                    threading.Thread(
+                        target=process_data,
+                        args=(requests_file_path, results_file_path, output_file_path, selected_mcqs_list, os.getenv('MODEL_NAME'), os.getenv('OPENAI_API_KEY')),
+                        daemon=True
+                    ).start()
+                    st.write("**🤓 Batch run initiated!**")
+                    
+        if st.session_state['batch_status'] == 'Completed':
+            with open(output_file_path, "rb") as file:
+                st.download_button(
+                label="💻 Download Results as CSV",
+                data=file,
+                file_name="batch_results.csv",
+                mime="text/csv",
+            )         
     except Exception as e:
         logging.error(f"Error in main function: {e}")
         st.error(f"An error occurred: {e}")

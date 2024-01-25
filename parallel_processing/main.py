@@ -1,10 +1,9 @@
-# main.py
 import asyncio
 import os
-from api_request_parallel_processor import process_api_requests_from_file
-from generate_requests import generate_chat_completion_requests
-from save_generated_data_to_csv import save_generated_data_to_csv
-from csv_to_array import convert_csv_to_array
+from parallel_processing.api_request_parallel_processor import process_api_requests_from_file
+from parallel_processing.generate_requests import generate_chat_completion_requests
+from parallel_processing.save_generated_data_to_csv import save_generated_data_to_csv
+from parallel_processing.csv_to_array import convert_csv_to_array
 from parallel_processing.prompts import placeholder_prompt
 from dotenv import load_dotenv
 import logging
