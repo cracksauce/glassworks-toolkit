@@ -13,7 +13,10 @@ temperature = float(os.getenv("TEMPERATURE", "0"))
 top_p = float(os.getenv("TOP_P", "0"))
 n = int(os.getenv("N", "1"))
 
-def generate_chat_completion_requests(requests_file_path, data, system_message, user_prompt, model_name):
+
+def generate_chat_completion_requests(
+    requests_file_path, data, system_message, user_prompt, model_name
+):
     # Ensure the 'requests_file_path' is the temporary file path passed from the Streamlit app
     with open(requests_file_path, "w") as f:
         for item in data:
@@ -39,3 +42,14 @@ def generate_chat_completion_requests(requests_file_path, data, system_message, 
             # Write the request body to the temporary .jsonl file
             json_string = json.dumps(request_body)
             f.write(json_string + "\n")
+
+
+if __name__ == "__main__":
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as temp_requests_file:
+        requests_file_path = (
+            temp_requests_file.name
+        )  # Use this as the path for the requests file
+        # Now call your function with requests_file_path
+        generate_chat_completion_requests(
+            requests_file_path, data, system_message, user_prompt, model_name
+        )

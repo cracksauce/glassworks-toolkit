@@ -6,6 +6,7 @@ import os  # for reading API key
 import re  # for matching endpoint from request URL
 import tiktoken  # for counting tokens
 import time  # for sleeping after rate limit is hit
+import tempfile
 from dataclasses import (
     dataclass,
     field,
@@ -30,13 +31,15 @@ seconds_to_sleep_each_loop = (
     0.001  # 1 ms limits max throughput to 1,000 requests per second
 )
 # Configure logging
-logging.basicConfig(filename='parallel_processing.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    filename="parallel_processing.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
-# Define async function to process requests
+
 async def process_api_requests_from_file(
     requests_filepath,  # Passed as a parameter
-    save_filepath,      # Passed as a parameter
     request_url,
     api_key,
     max_requests_per_minute,
@@ -44,39 +47,54 @@ async def process_api_requests_from_file(
     token_encoding_name,
     max_attempts,
     logging_level,
+    save_filepath,
 ):
+    # Create a temporary file for saving the responses
+    temp_file = tempfile.NamedTemporaryFile(delete=False, mode="w+", suffix=".jsonl")
+    save_filepath = temp_file.name  # Get the name of the temporary file created
+    temp_file.close()  # Close the file as it will be opened again later
+
     # Set up an HTTP session
     async with aiohttp.ClientSession() as session:
         # Open the file with the requests
-        with open(requests_filepath, 'r') as file:
+        with open(requests_filepath, "r") as file:
             # Read each line (each request) from the file
             for line in file:
                 request_data = json.loads(line)
-                
+
                 # Construct the headers for the request
                 headers = {
-                    'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {api_key}'
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
                 }
-                
+
                 # Make the API request and get the response
-                async with session.post(request_url, headers=headers, json=request_data) as response:
+                async with session.post(
+                    request_url, headers=headers, json=request_data
+                ) as response:
                     if response.status == 200:
                         # If the request was successful, parse the response and save it
                         response_data = await response.json()
-                        with open(save_filepath, 'a') as output_file:
+                        with open(save_filepath, "a") as output_file:
                             json.dump(response_data, output_file)
-                            output_file.write('\n')
+                            output_file.write("\n")
                     else:
                         # If the request was not successful, log detailed error information
                         try:
-                            error_response_data = await response.json()  # Attempt to parse the error response
-                            error_message = error_response_data.get('error', {}).get('message', 'No error message provided')
-                            logging.error(f"Failed request with status code: {response.status}. Error message: {error_message}")
+                            error_response_data = (
+                                await response.json()
+                            )  # Attempt to parse the error response
+                            error_message = error_response_data.get("error", {}).get(
+                                "message", "No error message provided"
+                            )
+                            logging.error(
+                                f"Failed request with status code: {response.status}. Error message: {error_message}"
+                            )
                         except json.JSONDecodeError:
                             # If parsing the error response fails, log the status code and mention that the error response was not JSON
-                            logging.error(f"Failed request with status code: {response.status}. The error response was not in JSON format.")
-
+                            logging.error(
+                                f"Failed request with status code: {response.status}. The error response was not in JSON format."
+                            )
 
     """Processes API requests in parallel, throttling to stay under rate limits."""
     # constants
@@ -93,9 +111,7 @@ async def process_api_requests_from_file(
 
     # initialize trackers
     queue_of_requests_to_retry = asyncio.Queue()
-    task_id_generator = (
-        task_id_generator_function()
-    )  # generates integer IDs of 1, 2, 3, ...
+    task_id_generator = count(start=1)  # Start from 1 or any initial task ID
     status_tracker = (
         StatusTracker()
     )  # single instance to track a collection of variables
@@ -111,11 +127,11 @@ async def process_api_requests_from_file(
     logging.debug(f"Initialization complete.")
 
     # initialize file reading
-    with open(requests_filepath, 'r') as file:
+    with open(requests_filepath, "r") as file:
         for line in file:
             request_data = json.loads(line)
         # `requests` will provide requests one at a time
-        requests = file.__iter__()
+        requests = file.readlines()
         logging.debug(f"File opened. Entering main loop")
         async with aiohttp.ClientSession() as session:  # Initialize ClientSession here
             while True:
@@ -177,16 +193,11 @@ async def process_api_requests_from_file(
                         next_request.attempts_left -= 1
 
                         # call API
-                        asyncio.create_task(
-                            next_request.call_api(
-                                session=session,
-                                request_url=request_url,
-                                request_header=request_header,
-                                retry_queue=queue_of_requests_to_retry,
-                                save_filepath=save_filepath,
-                                status_tracker=status_tracker,
-                            )
-                        )
+                        tasks = [
+                            next_request.call_api(...)
+                            for _ in range(concurrent_requests)
+                        ]
+                        await asyncio.gather(*tasks)
                         next_request = None  # reset next_request to empty
 
                 # if all tasks are finished, break
@@ -204,11 +215,10 @@ async def process_api_requests_from_file(
                     seconds_since_rate_limit_error
                     < seconds_to_pause_after_rate_limit_error
                 ):
-                    remaining_seconds_to_pause = (
+                    await asyncio.sleep(
                         seconds_to_pause_after_rate_limit_error
                         - seconds_since_rate_limit_error
                     )
-                    await asyncio.sleep(remaining_seconds_to_pause)
                     # ^e.g., if pause is 15 seconds and final limit was hit 5 seconds ago
                     logging.warn(
                         f"Pausing to cool down until {time.ctime(status_tracker.time_of_last_rate_limit_error + seconds_to_pause_after_rate_limit_error)}"
@@ -227,6 +237,7 @@ async def process_api_requests_from_file(
                 f"{status_tracker.num_rate_limit_errors} rate limit errors received. Consider running at a lower rate."
             )
 
+
 @dataclass
 class StatusTracker:
     """Stores metadata about the script's progress. Only one instance is created."""
@@ -243,65 +254,52 @@ class StatusTracker:
 
 @dataclass
 class APIRequest:
-    """Stores an API request's inputs, outputs, and other metadata. Contains a method to make an API call."""
-
     task_id: int
     request_json: dict
     token_consumption: int
     attempts_left: int
-    metadata: dict
-    result: list = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
+    temp_filepath: str = None  # This will store the temporary file path
 
-    async def call_api(self, session: aiohttp.ClientSession, request_url: str, request_header: dict, retry_queue: asyncio.Queue, save_filepath: str, status_tracker: StatusTracker):
+    async def call_api(
+        self,
+        session: aiohttp.ClientSession,
+        request_url: str,
+        request_header: dict,
+        retry_queue: asyncio.Queue,
+        status_tracker: object,
+    ):
         logging.info(f"Starting request #{self.task_id}")
-        error = None
         try:
-            async with session.post(url=request_url, headers=request_header, json=self.request_json) as response:
-                if response.status != 200:
-                    # Log detailed error message for non-200 responses
-                    error_detail = await response.text()
-                    logging.error(f"Request {self.task_id} failed with status {response.status}: {error_detail}")
-                    error = f"HTTP {response.status}: {error_detail}"
-                else:
+            async with session.post(
+                url=request_url, headers=request_header, json=self.request_json
+            ) as response:
+                if response.status == 200:
                     response_data = await response.json()
-                    if "error" in response_data:
-                        logging.warning(f"Request {self.task_id} failed with error {response_data['error']}")
-                        status_tracker.num_api_errors += 1
-                        error = response_data['error']
-                        if "Rate limit" in response_data["error"].get("message", ""):
-                            status_tracker.time_of_last_rate_limit_error = time.time()
-                            status_tracker.num_rate_limit_errors += 1
-                            status_tracker.num_api_errors -= 1  # rate limit errors are counted separately
+                    # Write the successful response to a temporary .jsonl file
+                    with open(self.temp_filepath, "a") as output_file:
+                        json.dump(response_data, output_file)
+                        output_file.write("\n")  # New line for next record in JSONL
+                    logging.info(
+                        f"Request {self.task_id} saved to {self.temp_filepath}"
+                    )
+                    status_tracker.num_tasks_succeeded += 1
+                else:
+                    error_detail = await response.text()
+                    logging.error(
+                        f"Request {self.task_id} failed with status {response.status}: {error_detail}"
+                    )
+                    status_tracker.num_tasks_failed += 1
+                    if self.attempts_left > 0:
+                        self.attempts_left -= 1
+                        retry_queue.put_nowait(
+                            self
+                        )  # Put it back in the queue to retry
         except Exception as e:
-            logging.warning(f"Request {self.task_id} failed with Exception {e}")
-            status_tracker.num_other_errors += 1
-            error = str(e)
-        if error:
-            self.result.append(error)
-            if self.attempts_left:
-                retry_queue.put_nowait(self)
-            else:
-                logging.error(
-                    f"Request {self.request_json} failed after all attempts. Saving errors: {self.result}"
-                )
-                data = (
-                    [self.request_json, [str(e) for e in self.result], self.metadata]
-                    if self.metadata
-                    else [self.request_json, [str(e) for e in self.result]]
-                )
-                append_to_jsonl(data, save_filepath)
-                status_tracker.num_tasks_in_progress -= 1
-                status_tracker.num_tasks_failed += 1
-        else:
-            data = (
-                [self.request_json, response, self.metadata]
-                if self.metadata
-                else [self.request_json, response]
-            )
-            append_to_jsonl(data, save_filepath)
+            logging.error(f"Request {self.task_id} failed with exception: {str(e)}")
+            status_tracker.num_tasks_failed += 1
+        finally:
             status_tracker.num_tasks_in_progress -= 1
-            status_tracker.num_tasks_succeeded += 1
-            logging.debug(f"Request {self.task_id} saved to {save_filepath}")
 
 
 def api_endpoint_from_url(request_url):
@@ -315,11 +313,13 @@ def api_endpoint_from_url(request_url):
     return match[1]
 
 
+# Correct and optimize jsonl appending function
 def append_to_jsonl(data, filename: str) -> None:
     """Append a json payload to the end of a jsonl file."""
-    json_string = json.dumps(data)
     with open(filename, "a") as f:
-        f.write(json_string + "\n")
+        for item in data:
+            json_string = json.dumps(item)
+            f.write(json_string + "\n")
 
 
 def num_tokens_consumed_from_request(
@@ -393,7 +393,6 @@ if __name__ == "__main__":
     asyncio.run(
         process_api_requests_from_file(
             requests_filepath=requests_filepath,
-            save_filepath=save_filepath,
             request_url=request_url,
             api_key=api_key,
             max_requests_per_minute=max_requests_per_minute,
